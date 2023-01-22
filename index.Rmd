@@ -1,0 +1,414 @@
+---
+title: "Cycling Race Analysis"
+author: "Alexander Perrin"
+date: "01-2023"
+
+output: 
+  #html_document:
+  rmdformats::downcute: 
+    toc: 3
+    toc_float: true
+---
+
+<style type="text/css">
+  body{
+  font-size: 14pt;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warnings = FALSE)
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.align='center') 
+```
+
+# Introduction & Who I am
+
+> The goal is to tell the story of the race with the data. Useful visuals with domain knowledge and annotations should make this informative to anyone interested in working with time series data, cycling performance, or both!
+
+```{r, out.width = "900px"}
+knitr::include_graphics("C:\\Users\\alecb\\Downloads\\RacePics2022\\StravaPFPCropped.jpg")
+```
+
+I'm Alec Perrin, an aspiring data scientist and a competitive cyclist in the regional amateur scene of the eastern US. As a self-described data nerd and semi-serious cyclist, I'm constantly analyzing and over-analyzing my own race performances in a sport that allows for a lot of data collection. While I've previously worried a lot about the game theory in race tactics and how to win by being smarter than my competition, I've seen some success and moved up to category 3 (in a range of 1-5) and now occasionally compete against domestic pros!
+
+This project is a look inside my race data files to objectively evaluate my own performances on multiple data points including heart rate (beats per minute or 'bpm'), power (in watts), and many other variables including elevation change, speed, pedal cadence, temperature, etc.
+
+I've performed time-series decomposition and plotted data points against the trend component for multiple metrics. Also, I've visualized the course maps for each race using the geospatial data collected. I will go in to detail on the process and meaning of the plots I've produced in context of the races and events within.
+
+I hope to continue to add to these analyses with future races and new approaches. I'd like to include a forecast of what an 'extra lap' might look like on certain courses, or determining my power curve for a race. 
+
+# The Data: Using .FIT Files
+
+## Data Creation & Collection
+To collect data while cycling for all my training and racing, I use a chest heart rate strap (records beats-per-minute) and a left-sided crank arm power meter that records power in wattage (as well as cadence - revolutions per minute). Both of these Bluetooth connect to my Wahoo Elemnt Bolt bike computer that is mounted just in front of my handlebars. This provides me a 'heads-up-display' while riding, showing my numbers down to the current second to see where my power and heart (exertion and effort) are at while training. The computer itself also records GPS data including speed, elevation change, and road maps/race routes to track latitude and longitude of a ride path. 
+
+> In a race, you rarely look down at these numbers, but it's important to know where they come from to understand the data context. 
+
+## Data Concerns & Caveats
+
+Generally, the readings from these devices are very trustworthy as long as things are well-charged, properly calibrated, and there's no extreme temperature fluctuations or weather conditions that affect readings. Sometimes, I do notice incorrect data points in my files that I do my best to make note of and clean - typically replacing with the local average. 
+An example is when the heart rate sensor pads don't have enough moisture to conduct a signal, or when a power meter isn't calibrated and reads a certain percentage higher/lower than usual (inconsistent across rides). 
+
+Another example is when the GPS speed sensor is a little "overly ambitious" and glitches my max speed record in certain environments, something I don't totally understand. 
+
+```{r, out.width = "250px"}
+knitr::include_graphics("C:\\Users\\alecb\\Downloads\\RacePics2022\\WahooDataScreen.jpg")
+```
+
+> 87.4 MPH would be pretty scary, the highest max speed I've had (that I still believe) is 55 MPH which is scary enough!
+
+## Data Processing
+The fitFileR package I discovered (https://github.com/grimbough/FITfileR) online as others have been doing similar work using .FIT files. This was useful and easy to implement in allowing me to read in this data type easily to R. .FIT files are very common from cycling computers or sports watches.
+
+```{r message=FALSE, warning=FALSE}
+#load tidyverse and install fitFileR package
+library(tidyverse)
+library(rmdformats)
+#if(!requireNamespace("remotes")) {
+#}
+#remotes::install_github("grimbough/FITfileR")
+
+```
+
+```{r message=FALSE, warning=FALSE}
+#Need other libraries for time series work, manipulation, etc.
+library(tseries)
+library(forecast)
+library(haven)
+library(fma)
+library(expsmooth)
+library(lmtest)
+library(zoo)
+library(seasonal)
+library(ggplot2)
+library(seasonalview)
+library(aTSA)
+library(imputeTS)
+library(reticulate)
+```
+
+## Data Cleaning & Manipulation Process
+
+Some work had to be done to make the file usable once read-in. The data concerns here were easily noticed, as it is personally collected data. I know that before the whistle goes to start the race, I press 'start' on my bike computer just seconds beforehand to ensure I record the race in it's entirety. This means a few seconds of zero values being recorded for speed and power, as the file itself is a large time series set down to the second. Trimming the start and end of the file to get only the minutes and seconds I spent racing is vital to determine the closest 'average' cycle for time series modeling later. 
+
+
+# Herbalife Criterium Race Analysis
+
+```{r, out.width = "900px"}
+knitr::include_graphics("C:\\Users\\alecb\\Downloads\\RacePics2022\\HerbThumbnail.jpg")
+```
+
+A criterium is a type of race that lasts between 40 minutes to an hour and uses a short 0.5 - 1.5 mile circuit. This data file comes from a summer evening race near Greensboro, NC and includes power data and heart rate data. 
+
+>In this race, I got 3rd place (on the podium!) due to a successful racing strategy (shown in the data) and the fitness to allow me to use that strategy. Let's set the stage:
+
+Reading in the data file:
+```{r echo = T, results = 'hide', message=FALSE, warning=FALSE}
+#Read in data from one race: (.FIT file type)
+library(FITfileR)
+
+Herbalife_Power <- readFitFile("C:\\Users\\alecb\\Downloads\\RaceData\\Herbalife_Power.fit")
+```
+
+
+```{r include=FALSE}
+#Working with file:
+Herbalife_Power_records <- records(Herbalife_Power)
+Herbalife_Power_records
+
+## report the number of rows for each set of record messages
+vapply(Herbalife_Power_records, FUN = nrow, FUN.VALUE = integer(1))
+```
+
+```{r include=FALSE}
+#condense records
+library(dplyr)
+
+HP_records <- records(Herbalife_Power) %>% 
+  bind_rows() %>% 
+  arrange(timestamp) 
+
+HP_records
+```
+
+Dropping the zeroes from the start:
+```{r echo=TRUE, message=TRUE}
+#drop rows where speed = 0 (started but not rolling)
+HP_recordsFix <- HP_records[-c(1:3),]
+HP_recordsFix
+```
+## Course Map
+> First let's look at the course:
+
+I used the 'Leaflet' package in R to plot the geospatial coordinates from the data file, visualziing all of the laps on top of one-another using OpenStreetMap as a baselayer. This course is relatively flat with a main feature being one tight, sweeping 180-degree turn immediately after the start/finish line (bottom right). 
+
+To plot GPS data:
+
+- First select gps coordinates:
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+coords <- HP_records %>% 
+  dplyr::select(position_long, position_lat)
+```
+
+- Then use the leaflet package for mapping coordinates:
+```{r width=12, echo=TRUE, message=FALSE, warning=FALSE}
+library(leaflet)
+
+HerbalifeCourse <- coords %>% 
+  as.matrix() %>%
+  leaflet(width= "100%") %>% 
+  addTiles() %>%
+  addPolylines( ) %>% 
+  addMarkers(
+    lng = -80.12434, lat = 36.06218,
+    label = "Start/Finish",
+    labelOptions = labelOptions(noHide = T, direction ="bottom")
+  )
+    
+HerbalifeCourse
+```
+
+By not removing 36 of the 37 laps, the layover of all 37 visualizes the racing line taken by the field. While raced around a large concrete pad with some street lights, the fastest lines through all the turns form a smooth, curvy shape when cornering at speed. The stray lines on the back straight (left side vertically) come either from attacks around the side of the field or slow-downs to pull off the front and allow others to "do the work."
+
+```{r}
+#subselect HR and Power over time
+library(tidyr)
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+
+hr_table <- HP_recordsFix %>%
+  dplyr::select(timestamp, heart_rate)
+
+pwr_table <- HP_recordsFix %>%
+  dplyr::select(timestamp, power)
+```
+
+## Power Data Time Series Analysis:
+
+To visualize metrics in this data file, the data points have to be plotted over time. To actually perform time series analysis with the relevant R packages, the dataframe first has to be a time series object. In this conversion, all N/A values are omitted and the date format has to be chosen (in this case, down to hour-minute-second). I also have to choose a 'frequency' of cycle for the time series to follow. In this case, the average lap in the data is approximately 72.7 seconds, determined by the number of laps divided by total time in seconds. 
+
+> Note: Some laps are much faster than others, so choosing a frequency is imperfect.
+
+```{r}
+# roll up to TS object
+pwrr_table_clean <- na.omit(pwr_table)
+library(zoo)
+#total <- function(x) c(sum(x))
+pwr <- read.zoo(pwr_table, header = TRUE, format = "%Y-%m-%d %H:%M:%S", FUN=as.POSIXct)
+
+pwr_df <- as.data.frame(pwr)
+
+pwr_df_ts <- ts(pwr_df$pwr, frequency =  72.676)
+
+#2689 obs per sec / 37 laps = 72.676
+```
+
+The first thing typically done in a time series analysis is an STL (Seasonal and Trend using LOESS estimation) Decomposition. This allows us to look at the individual components of the data and see what noise remains. To prepare our expectations, a power file from a criterium race is likely to be very spiky on a punchy course like the one at Herbalife.
+
+> For the race, my average power was 270 watts. To better account for accelerations and the un-smoothness of racing, the "normalized" average power is higher at 288 watts. There's often a large acceleration out of the first corner on the course (partly because I often took a slower line as my handling isn't the best) that is captured by the seasonality. Additonal accelerations as I push the pace in attacking the field at key points are shown in the trend line. 
+
+```{r echo=TRUE, fig.cap="STL Decomposition of Power (Watts)", warning=FALSE}
+#plot TS Decomposition
+#first decompose
+decomp_pwr <- stl(pwr_df_ts, s.window = 7)
+
+# Plot the individual components of the time series
+theme_set(theme_minimal(base_size = 12))
+
+stl_pwr <- ggplot2::autoplot(decomp_pwr) + 
+  xlab("Lap Count") +
+  geom_vline(xintercept = 6.5, linetype="dashed", color = "blue", size = 1) +
+  geom_vline(xintercept = 26.8, linetype="dashed", color = "blue", size = 1) +
+  geom_vline(xintercept = 31.1, linetype="dashed", color = "blue", size = 1) + 
+  theme(text = element_text(size = 26))
+
+stl_pwr
+```
+
+
+The plot above shows each component over the duration of the race. Having been in the race, I can describe and make sense of the peaks and valleys of power output and, if you are familiar with power numbers in cycling, you can understand the type of effort required to stay in the race!
+
+Now's a good time to mention my race plan, it's pretty simple: 
+
+> My Strategy: Attack from the gun to try and intialize a breakaway. If we get a gap to the field, commit to staying out front. Otherwise, I can see who is strong and/or motivated to chase the win today. 
+
+And here's how it went down, described by the power data decomposition:
+
+1. The attack from the start is shown in the remainder. I got a gap and a few people joined me but we couldn't work together well. We lost our gap and some people dropped while others bridged across. I surged again to keep it strung out and ended up with two others off the front. 
+
+2. Now we had to make this breakaway of 3 stick. You can see we ride more consistently in the seasonality while keeping the power and speed up (a large acceleration out of the slow corner each lap). As we built up a gap to the field, we got smoother and started gaining on an unmotivated field from behind.
+
+3. With about 10 laps or 15 minutes to go, we were getting close to lapping the field. I attacked out of the breakaway with a large sprint effort and some sustained power for about 1.5 laps to bridge the gap to the back of the field. Once in the draft of the peloton, you see the power trend reach it's minimum.
+
+4. While the power trend line reaches it's minimum and I get a chance to recover, I realize the other two breakaway riders were also able to bridge to the field. This means I'm still only guaranteed 3rd at best - but we're trying to win...
+
+5. The remainder (noise) and trend have more pickups at the end. Someone attacked the field to try and stay away the last few laps on a steady effort, something I had to help my teammates work to bring back (I didn't want the other riders who had lapped the field to have another chance out front). Then, the pace ramps for the final sprint once it's all back together. 
+
+> In the final chaos, I can't move up in the field and have to take my 3rd place spot on the podium.
+
+I won enough money to cover my race entry and earned some upgrade points. 
+More importantly I had fun racing with friends, got to lap the field, and kept all my skin on (no crashes)!
+
+Now, let's recap the power analysis:
+
+> Observations:
+>
+- Power seasonality shows surges out of the corner every single lap, especially the repeatability required at the start of   the breakaway
+- The noise at the start of the race for power shows the dynamic nature of the race outside of the normal lap surge          from the corners. This is nature of the effort required to make the break happen. There is also a lot of noise at the      later bridge attempt.
+
+
+## Heart Rate Time Series Analysis
+
+I performed the same data cleaning process for the heart rate data frame and repeated the STL decomposition with the time series object. Unlike instantaneous power output measured from the cranks, beats-per-minute increases with the amount of oxygen required by your muscles as your body circulates blood faster. This means there is short lag between sustained efforts and the rise in heart rate. Also, after intense repeated efforts (like in racing) there becomes a decoupling between the two as your body fatigues and your heart rate becomes less sensitive to each individual effort, trying to continuously replenish your system after lots of work. 
+
+```{r}
+# Roll up data to TS object
+
+hr_table_clean <- na.omit(hr_table)
+library(zoo)
+#total <- function(x) c(sum(x))
+hr <- read.zoo(hr_table, header = TRUE, format = "%Y-%m-%d %H:%M:%S", FUN=as.POSIXct)
+
+hr_df <- as.data.frame(hr)
+
+hr_df_ts <- ts(hr_df$hr, frequency =  72.676)
+
+#2689 obs per sec / 37 laps = 72.676
+```
+
+
+```{r fig.cap="STL Deccomposition of Heart Rate (BPM)"}
+# Plot TS Decomposition
+
+#first decompose
+decomp_hr <- stl(hr_df_ts, s.window = 7)
+# Plot the individual components of the time series
+stl_hr <- ggplot2::autoplot(decomp_hr) 
+stl_hr + theme_minimal(base_size = 12) +
+  xlab("Lap Count") +
+  geom_vline(xintercept = 6.8, linetype="dashed", color = "red", size = 1) +
+  geom_vline(xintercept = 26.4, linetype="dashed", color = "red", size = 1) +
+  geom_vline(xintercept = 28.9, linetype="dashed", color = "red", size = 1) +
+  geom_vline(xintercept = 31.7, linetype="dashed", color = "red", size = 1) + 
+  theme(text = element_text(size = 26))
+```
+
+```{r eval=FALSE, include=FALSE}
+# change options later****
+
+# set info:
+annotation <- data.frame( 
+  x = c(),
+  y = c(20,25),
+  label = c("insert text")
+)
+
+# add text to plot
+stl_hr + geom_text(data=annotation, aes(x=x, y=y, label=label), 
+                   color = "purple",
+                   size = 6)
+
+# a data frame with all the annotation info
+#annotation <- data.frame(
+#   x = c(2,4.5),
+#   y = c(20,25),
+#   label = c("insert text")
+#)
+
+# Add text
+#p + geom_text(data=annotation, aes( x=x, y=y, label=label),                 , 
+#           color="orange", 
+#           size=7 , angle=45, fontface="bold" )
+```
+
+
+The heart rate decomposition above shows a much more comprehensive explanation of race events. Both data points are great measures of the effort required, but to the human eye this is much less variability to process.
+
+Let's apply the same race events from the power analysis:
+
+1. The attack from the start is shown in the remainder. I got a gap and a few people joined me but we couldn't work together well. We lost our gap and some people dropped while others bridged across. I surged again to keep it strung out and ended up with two others off the front. This meant great fluctuations in effort as I was fighting to stay out front.
+
+2. Now we had to make this breakaway of 3 stick. You can see we ride more consistently in the seasonality while keeping the power and speed up (a large acceleration out of the slow corner each lap). As we built up a gap to the field, we got smoother and started gaining on an unmotivated field from behind.
+
+3. With about 10 laps or 15 minutes to go, we were getting close to lapping the field. I attacked out of the breakaway with a large sprint effort and some sustained power for about 1.5 laps to bridge the gap to the back of the field. The heart rate is barely upped due to fatigue at this point, but it does reach a max of 192 beats per minute. 
+
+4. While the heart rate trend line reaches a local minimum and I get a chance to recover, I realize the other two breakaway riders were also able to bridge to the field. This means I'm still only guaranteed 3rd at best - but we're trying to win...
+
+5. Again, the remainder (noise) and trend have more pickups at the end. Heart rate ramps up and reaches a near-maximum at the finish line. 
+
+> This is explainable in the same way as the power file and fits the same story, but is much clearer to understand the events as heart rate is smooth. I can stop pedaling to coast through a corner and the power can drop to zero for a second. Luckily, heart rate didn't drop to zero at any point ;)
+
+
+### Overlays of Trend from Heart Rate and Power:
+
+Plotted below is a look at just the trend lines over one another. This overlay really shows the lagged response in heart rate to the efforts of output (wattage). To get a better idea of where the average sits and the effort required for a race under an hour long, my average heart rate was 180 BPM and, as mentioned above, normalized average power was 288 watts. 
+
+A race this short will definitely be high in intensity as we try to wear each other out with short, sharp efforts - as was the way the race played out. This was late season for me, but an average of 180 BPM is a personal record for over 40 minutes and means I was very fit, regardless of my muscualar capacity to do work (the power output numbers). 
+
+```{r eval=FALSE, include=FALSE}
+# Overlay trend component on full series
+full_hr <- autoplot(hr_df_ts) + 
+geom_line(aes(y=decomp_hr$time.series[,2]), color="red") 
+
+full_pwr <- autoplot(pwr_df_ts) +
+  geom_line(aes(y=decomp_pwr$time.series[,2]), color="blue")
+
+full <- full_hr + labs(title = "Heart Rate Trend Time Series", x = "Minutes", y = "Heart Rate Value (BPM)")
+
+full_pwr <- full_pwr + labs(title = "Power Trend Time Series", x = "Minutes", y = "Power (Watts)")
+
+full + theme(text = element_text(size = 26)) 
+full_pwr + theme(text = element_text(size = 26)) 
+```
+
+```{r echo=TRUE}
+# Trend combination
+scale = 1.5
+
+dual <- ggplot(hr_table_clean, aes(x= timestamp)) +
+  geom_line(aes(y=decomp_hr$time.series[,2]), color="red") +
+  geom_line(aes(y=(decomp_pwr$time.series[,2])/scale), color="blue") +
+  scale_x_datetime(date_labels = c("45", "0", "15", "30")) +
+   #date_labels = "%M", 
+   # breaks = seq(0, 46.15, 10)) 
+  scale_y_continuous(name = "Heart Rate (BPM)",
+  sec.axis= sec_axis(~.*scale, name = "Power (Watts)")) +
+  labs(title = "Heart Rate & Power Trend Overlay", x = "Minutes") +
+  theme(text = element_text(size = 23))
+
+dual
+```
+
+>Observations: 
+> 
+- The heart rate data is much clearer and smoother than power to show race events and fatigue. 
+- The power data shows the frequency of sprint efforts in such a short race. 
+  Jumps and sustained peaks above the average are seriously dulling physically. 
+
+### Takeaways
+
+These overlay plots on the actual data show a similar ebb and flow of trends. The power plot shows the actual spikes that occur, with sprint efforts over 750 watts being massive kicks of effort to first establish the reshuffled breakaway, and second, to bridge to the back of the field. You can then easily understand the drop in power to join a slow field before spiking up to cover moves in the last laps.
+
+A great way to self-evaluate performance that I've learned from my faster teammates to pick out 3 things you did well in the race, and 3 things you still need to work on. When you don't get the result you want (..and even when you do) this is the nature of self-coaching and constant improvement. 
+
+Things done well:
+
+1. Execution: Stuck to a strategy for the race and executed it effectively.
+
+2. Commitment: Didn't give up when the breakaway composition was reshuffled early on.
+
+3. Consistency: Smoothed out the first corner with more practice each lap to make it smoother (more efficient).
+
+Room to improve: 
+
+1. Handling: Improving my handling in general will allow for smoother and faster cornering, lowering the number of power surges needed to maintain speed.
+
+2. Tactics: Not losing my head when rejoining the field. I lost the other two from the breakaway amidst the group and was worried about positioning a lot in the final laps. Maybe instead of bridging to the field, I could've left it later and made a different move to win from the smaller group.
+
+3. Teamwork: Using my teammates better. Telling them to block when I attack at the start doesn't let them help much, but once back in the field I could rely on them to do more work even though I had recovered in a few minutes.
+  
+> Thanks for reading!
+ -------------------------------
+ Author: Alexander Perrin
+ alperrin@ncsu.edu

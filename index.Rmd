@@ -278,7 +278,7 @@ hr_df_ts <- ts(hr_df$hr, frequency =  72.676)
 ```
 
 
-```{r fig.cap="STL Deccomposition of Heart Rate (BPM)"}
+```{r fig.cap="STL Decomposition of Heart Rate (BPM)"}
 # Plot TS Decomposition
 
 #first decompose
@@ -386,7 +386,7 @@ dual
 - The power data shows the frequency of sprint efforts in such a short race. 
   Jumps and sustained peaks above the average are seriously dulling physically. 
 
-### Takeaways
+## Takeaways
 
 These overlay plots on the actual data show a similar ebb and flow of trends. The power plot shows the actual spikes that occur, with sprint efforts over 750 watts being massive kicks of effort to first establish the reshuffled breakaway, and second, to bridge to the back of the field. You can then easily understand the drop in power to join a slow field before spiking up to cover moves in the last laps.
 
